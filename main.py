@@ -23,7 +23,7 @@ async def main():
     dp.include_router(youtube_router)
     dp.include_router(callbacks_router)
 
-    print("🤖 Bot started...")
+    print("🤖 Бот запущен...")
 
     # запуск polling
     await dp.run_polling()

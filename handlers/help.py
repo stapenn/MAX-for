@@ -9,8 +9,8 @@ router = Router()
 @router.message(F.text == "/help")
 async def cmd_help(message: Message):
     text = (
-        "Currently bot only supports single Youtube videos (no playlists).\n"
-        "Just send a Youtube url 👇"
+        Бот пока поддерживает только загрузку отдельных видео с YouTube (плейлисты не обрабатываются).
+        Просто отправьте ссылку на ролик 👇
     )
 
     await get_current_dispatcher().bot.send_message(
