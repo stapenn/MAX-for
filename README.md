@@ -1,15 +1,17 @@
-<div align="center">
+
 
 # 🎬 MAX Downloader Bot  
 ### Хакатон VK × MAX • 2025
 
 Умный чат-бот, который превращает обычную YouTube-ссылку в готовый mp4 файл.
-
+<div align="center">
 <br/>
 
 <img width="70" src="https://upload.wikimedia.org/wikipedia/commons/7/75/Max_logo_2025.png" alt="preview" />
 
 <br/><br/>
+<div align="left">
+
 ## 1. Настройка `.env`
 В корне проекта **создай файл `.env`**:
 
