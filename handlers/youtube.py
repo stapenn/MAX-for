@@ -1,28 +1,30 @@
+# handlers/youtube.py
+
 from pathlib import Path
 from uuid import uuid4
 from typing import Dict
 
-from aiogram import Router, F
-from aiogram.types import (
+from maxbot.router import Router
+from maxbot.filters import TextStartsFilter
+from maxbot.types import (
     Message,
-    CallbackQuery,
+    Callback,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.utils.markdown import hbold
+from maxbot.dispatcher import get_current_dispatcher
 
 from limits import check_limit, set_limit
 from ytdl import prepare_formats, download_selected_format, human_bytes
-from aiogram.types import FSInputFile
 
 
 router = Router()
 
-YOUTUBE_REGEX = r"(https?://)?(www\.)?(youtube\.com|youtu\.be)/\S+"
+YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
 DOWNLOAD_CACHE: Dict[str, str] = {}
 
 
-def _build_formats_keyboard(formats, url: str, user_id: int) -> InlineKeyboardMarkup:
+def _build_formats_keyboard(formats, url: str) -> InlineKeyboardMarkup:
     """
     На основе списка форматов собираем inline-клавиатуру.
     callback_data: yt|token|format_id
@@ -48,7 +50,7 @@ def _build_formats_keyboard(formats, url: str, user_id: int) -> InlineKeyboardMa
         text = f"{ext} {quality} ({size_str})"
 
         # генерим короткий токен и сохраняем соответствие
-        token = uuid4().hex[:8]  # 8 символов — вообще безопасно по длине
+        token = uuid4().hex[:8]  # 8 символов — норм
         DOWNLOAD_CACHE[token] = url
 
         cb = f"yt|{token}|{fmt_id}"
@@ -57,78 +59,128 @@ def _build_formats_keyboard(formats, url: str, user_id: int) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-
-@router.message(F.text.regexp(YOUTUBE_REGEX))
+@router.message()
 async def handle_youtube_link(message: Message):
-    user_id = message.from_user.id
-    url = message.text.strip()
+    """
+    Ловим все сообщения, а внутри сами фильтруем по доменам youtube.com / youtu.be.
+    Никаких .reply и .recipient — только bot.send_message(user_id=...).
+    """
+    bot = get_current_dispatcher().bot
+
+    text = (getattr(message, "text", "") or "").strip()
+    if not text or text.startswith("/"):
+        # команды и пустые сообщения игнорируем
+        return
+
+    # проверяем, что это похоже на YouTube-ссылку
+    if not any(domain in text for domain in YOUTUBE_DOMAINS):
+        return
+
+    # в umaxbot/README используют message.sender.id
+    user_id = message.sender.id
+    url = text
 
     # 1. Проверяем лимит
     wait = check_limit(user_id)
     if wait is not None:
-        await message.answer(f"Подожди ещё {wait} минут перед следующей загрузкой 🙏")
+        await bot.send_message(
+            user_id=user_id,
+            text=f"Подожди ещё {wait} минут перед следующей загрузкой 🙏",
+        )
         return
 
     # 2. Пишем, что начали
-    status_msg = await message.answer("Ищу данные о видео... 🔎")
+    await bot.send_message(
+        user_id=user_id,
+        text="Ищу данные о видео... 🔎",
+    )
 
     try:
         title, thumb, fmts = await prepare_formats(url)
-    except Exception as e:
-        await status_msg.edit_text("Не удалось получить информацию о видео 😥")
+    except Exception:
+        await bot.send_message(
+            user_id=user_id,
+            text="Не удалось получить информацию о видео 😥",
+        )
         return
 
     if not fmts:
-        await status_msg.edit_text("Не нашёл подходящих форматов для скачивания.")
+        await bot.send_message(
+            user_id=user_id,
+            text="Не нашёл подходящих форматов для скачивания.",
+        )
         return
 
     # 3. Ставим лимит
     set_limit(user_id)
 
-    kb = _build_formats_keyboard(fmts, url, user_id)
+    kb = _build_formats_keyboard(fmts, url)
+    text_resp = f"Выбери формат для:\n{title}" if thumb else f"Выбери формат:\n{title}"
+
+    await bot.send_message(
+        user_id=user_id,
+        text=text_resp,
+        reply_markup=kb,
+    )
 
 
-    if thumb:
-        # Если есть thumbnail – просто отправим текстом, без скачивания картинки
-        await status_msg.edit_text(f"{hbold('Выбери формат для:')}\n{title}", reply_markup=kb)
-    else:
-        await status_msg.edit_text(f"{hbold('Выбери формат:')}\n{title}", reply_markup=kb)
+@router.callback(TextStartsFilter("yt|"))
+async def handle_youtube_download(callback: Callback):
+    """
+    Обработка нажатия на inline-кнопку.
+    """
+    bot = get_current_dispatcher().bot
 
+    # убрать "часики" у кнопки
+    await bot.answer_callback(
+        callback_id=callback.callback_id,
+        notification="Начал загрузку...",  # можно текст типа "Начал загрузку…", если надо
+    )
 
-@router.callback_query(F.data.startswith("yt|"))
-async def handle_youtube_download(callback: CallbackQuery):
-    await callback.answer()  # убрать "часики"
+    user_id = callback.user.id
 
+    data = callback.payload or ""
     try:
-        _, token, fmt_id = callback.data.split("|", maxsplit=2)
+        _, token, fmt_id = data.split("|", maxsplit=2)
     except Exception:
-        await callback.message.answer("Некорректные данные кнопки 🤔")
+        await bot.send_message(
+            user_id=user_id,
+            text="Некорректные данные кнопки 🤔",
+        )
         return
 
     # достаём url из кэша
     url = DOWNLOAD_CACHE.get(token)
     if not url:
-        await callback.message.answer("Не удалось найти данные для этой кнопки, попробуй ещё раз отправить ссылку 🙏")
+        await bot.send_message(
+            user_id=user_id,
+            text="Не удалось найти данные для этой кнопки, отправь ссылку ещё раз 🙏",
+        )
         return
 
-    user_id = callback.from_user.id
-    msg = await callback.message.edit_text("Скачиваю файл, подожди... ⏬")
+    await bot.send_message(
+        user_id=user_id,
+        text="Скачиваю файл, подожди... ⏬",
+    )
 
     try:
         file_path: Path = await download_selected_format(url, fmt_id, user_id)
-    except Exception as e:
-        await msg.edit_text("Ошибка при скачивании видео 😢")
-        # можно сразу удалить устаревший токен
+    except Exception:
+        await bot.send_message(
+            user_id=user_id,
+            text="Ошибка при скачивании видео 😢",
+        )
         DOWNLOAD_CACHE.pop(token, None)
         return
 
     try:
-        file = FSInputFile(path=file_path)
-        await callback.message.answer_document(
-            document=file,
-            caption=f"Готово ✅\n{file_path.name}",
+        # отправляем как универсальный файл
+        await bot.send_file(
+            file_path=str(file_path),
+            media_type="file",
+            user_id=user_id,
+            text=f"Готово ✅\n{file_path.name}",
         )
-        await msg.delete()
     finally:
         # чистим файл и токен
         try:

@@ -1,38 +1,32 @@
+# main.py
+
 import asyncio
-
-from aiogram import Bot, Dispatcher
-from aiogram.types import BotCommand
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-
+from mybot import Bot
+from maxbot.dispatcher import Dispatcher
+from callbacks import router as callbacks_router
 from config import BOT_TOKEN
-from handlers import start_router, help_router, youtube_router
-
-print("BOT_TOKEN =", BOT_TOKEN[:10], "...")
-async def set_bot_commands(bot: Bot):
-    commands = [
-        BotCommand(command="start", description="Запуск/перезапуск бота"),
-        BotCommand(command="help", description="Что умеет бот"),
-    ]
-    await bot.set_my_commands(commands)
+from handlers.start import router as start_router
+from handlers.help import router as help_router
+from handlers.youtube import router as youtube_router
 
 
 async def main():
-    bot = Bot(
-        token=BOT_TOKEN,
-        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
-    )
-    dp = Dispatcher()
+    # создаём бота
+    bot = Bot(token=BOT_TOKEN)
 
+    # создаём диспетчер
+    dp = Dispatcher(bot)
+
+    # подключаем все роутеры
     dp.include_router(start_router)
     dp.include_router(help_router)
     dp.include_router(youtube_router)
+    dp.include_router(callbacks_router)
 
-    await set_bot_commands(bot)
-    await bot.delete_webhook(drop_pending_updates=True)
+    print("🤖 Bot started...")
 
-    print("Bot started...")
-    await dp.start_polling(bot)
+    # запуск polling
+    await dp.run_polling()
 
 
 if __name__ == "__main__":

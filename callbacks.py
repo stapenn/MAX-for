@@ -5,16 +5,20 @@ import os
 import tempfile
 from typing import Tuple
 
-from aiogram import types
-from aiogram.dispatcher import Dispatcher
-
 import yt_dlp  # не забудь добавить в requirements.txt
+
+from maxbot.router import Router
+from maxbot.dispatcher import get_current_dispatcher
+from maxbot.filters import TextStartsFilter
+from maxbot.types import Callback
+
+router = Router()
 
 
 # ------------------------ разбор callback_data ------------------------ #
 def parse_yt_callback(data: str) -> Tuple[str, str, str]:
     """
-    Ожидаемый формат callback_data:
+    Ожидаемый формат callback_data / payload:
         "yt|video|itag|<url>"
         "yt|audio|itag|<url>"
 
@@ -37,15 +41,13 @@ async def download_with_yt_dlp(url: str, itag: str) -> str:
     Скачивает выбранный формат в tmp-файл и возвращает путь к нему.
     """
     tmp_dir = tempfile.mkdtemp(prefix="ytbot_")
-    # имя файла без расширения, само расширение подставит yt-dlp
     out_tmpl = os.path.join(tmp_dir, "%(title)s.%(ext)s")
 
     ydl_opts = {
         "outtmpl": out_tmpl,
         "quiet": True,
         "noprogress": True,
-        # выбираем формат по itag
-        "format": itag,
+        "format": itag,  # выбираем формат по itag
     }
 
     loop = asyncio.get_event_loop()
@@ -54,7 +56,6 @@ async def download_with_yt_dlp(url: str, itag: str) -> str:
         lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]),
     )
 
-    # находим единственный файл в tmp_dir
     files = os.listdir(tmp_dir)
     if not files:
         raise RuntimeError("Файл не был скачан")
@@ -63,78 +64,83 @@ async def download_with_yt_dlp(url: str, itag: str) -> str:
 
 
 # ------------------------ основной handler callback'ов ------------------------ #
-async def youtube_format_chosen(callback: types.CallbackQuery):
+@router.callback(TextStartsFilter("yt|"))
+async def youtube_format_chosen(cb: Callback):
     """
     Обработчик нажатия на кнопку выбора качества/формата.
 
-    callback.data должен быть формата:
+    cb.payload должен быть формата:
         "yt|video|itag|<url>"
         "yt|audio|itag|<url>"
     """
+    bot = get_current_dispatcher().bot
+    payload = cb.payload or ""
+
+    # user_id — куда слать файл/ответы
+    user_id = cb.user.id
+
+    # 1. Парсим payload
     try:
-        kind, itag, url = parse_yt_callback(callback.data)
+        kind, itag, url = parse_yt_callback(payload)
     except ValueError:
-        await callback.answer("Неподдерживаемый формат кнопки 😕", show_alert=True)
+        # ВМЕСТО cb.answer(...) — ответ через Bot.answer_callback
+        await bot.answer_callback(
+            callback_id=cb.callback_id,
+            notification="Неподдерживаемый формат кнопки 😕",
+        )
         return
 
-    # уведомляем пользователя
-    await callback.answer("Начал загрузку…", show_alert=False)
+    # 2. Подтверждаем нажатие (убираем «часики» и даём уведомление)
+    await bot.answer_callback(
+        callback_id=cb.callback_id,
+        notification="Начал загрузку…",
+    )
 
-    msg = callback.message
-    waiting = await msg.reply("⏬ Скачиваю файл, подожди немного…")
+    # 3. Сообщаем пользователю в чат
+    await bot.send_message(
+        user_id=user_id,
+        text="⏬ Скачиваю файл, подожди немного…",
+    )
 
     file_path = None
     try:
-        # скачиваем выбранный формат
+        # 4. Скачиваем выбранный формат
         file_path = await download_with_yt_dlp(url, itag)
 
-        # отправляем пользователю
-        if kind == "video":
-            await msg.answer_video(
-                open(file_path, "rb"),
-                caption="✅ Готово! Вот твоё видео.",
-            )
-        else:  # audio
-            await msg.answer_audio(
-                open(file_path, "rb"),
-                caption="✅ Готово! Вот твой аудио-файл.",
-            )
+        caption = (
+            "✅ Готово! Вот твоё видео."
+            if kind == "video"
+            else "✅ Готово! Вот твой аудио-файл."
+        )
+        media_type = "video" if kind == "video" else "audio"
+
+        # 5. Отправляем файл пользователю
+        await bot.send_file(
+            file_path=file_path,
+            media_type=media_type,
+            user_id=user_id,
+            text=caption,
+        )
 
     except Exception as e:
-        await msg.answer(f"❌ Ошибка при загрузке: {e}")
+        # Если что-то пошло не так — шлём текстом
+        await bot.send_message(
+            user_id=user_id,
+            text=f"❌ Ошибка при загрузке: {e}",
+        )
     finally:
-        # чистим «Загружаю…»
-        try:
-            await waiting.delete()
-        except Exception:
-            pass
-
-        # удаляем временный файл/папку
+        # 6. Чистим временный файл/папку
         if file_path:
             try:
                 tmp_dir = os.path.dirname(file_path)
-                # сначала удаляем файл
                 try:
                     os.remove(file_path)
                 except FileNotFoundError:
                     pass
-                # потом директорию
                 try:
                     os.rmdir(tmp_dir)
                 except OSError:
-                    # если там что-то ещё лежит
+                    # если вдруг ещё что-то осталось — просто забьём
                     pass
             except Exception:
                 pass
-
-
-# ------------------------ регистрация в диспетчере ------------------------ #
-def register_callback_handlers(dp: Dispatcher):
-    """
-    Регистрируем все callback-хендлеры этого модуля.
-    Вызывай её из main.py / loader.py.
-    """
-    dp.register_callback_query_handler(
-        youtube_format_chosen,
-        lambda c: c.data and c.data.startswith("yt|"),
-    )
