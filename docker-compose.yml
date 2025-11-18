@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  bot:
+    build: .
+    container_name: max2-bot
+    env_file:
+      - .env
+    # или так:
+    # environment:
+    #   BOT_TOKEN: ${BOT_TOKEN}
+    restart: unless-stopped
