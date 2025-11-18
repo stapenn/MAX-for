@@ -47,27 +47,8 @@ python main.py
 
 ## 3. Запуск в Docker
 
-### Сборка образа
+### Сборка образа и заупск
 
-```bash
-docker build -t max2-bot .
 ```
-
-### Запуск контейнера
-
-```bash
-docker run --rm \
-  --env-file .env \
-  max2-bot
+docker-compose up --build
 ```
-
-Если хочешь сохранять скачанные файлы на хост:
-
-```bash
-docker run --rm \
-  --env-file .env \
-  -v "$(pwd)/downloads:/app/downloads" \
-  max2-bot
-```
-
-
